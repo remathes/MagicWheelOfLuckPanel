@@ -13,7 +13,7 @@ using Random = UnityEngine.Random;
 
 namespace Oxide.Plugins
 {
-    [Info("Magic Wheel Of Luck Panel", "TechnicalJunky", "1.1.1")]
+    [Info("Magic Wheel Of Luck Panel", "TechnicalJunky", "1.1.2")]
     [Description("Displays if they have a spin for the WheelOfLuck in a MagicPanel. " +
         "Players get an chance to get a new item every 24hrs from the Wheel Of Luck!")]
     //Credits go to the author of MagicPanel without his code I would not have been able to learn as much as I did
@@ -136,6 +136,10 @@ namespace Oxide.Plugins
         }
         private void Unload()
         {
+            if(image_change_timer !=null)
+            {
+                image_change_timer.Destroy();
+            }
             InvokeHandler.Instance.CancelInvoke(UpdatePlayerTime);
             if (_updateRoutine != null)
             {
@@ -238,7 +242,7 @@ namespace Oxide.Plugins
         private PluginConfig AdditionalConfig(PluginConfig config)
         {
             images = new string[] { "https://i.postimg.cc/Z57ZbkGc/image1.png", "https://i.postimg.cc/SK3SKC7Q/image2.png", "https://i.postimg.cc/T3k2ZZKD/image3.png", "https://i.postimg.cc/rpKycQ4Y/image4.png",
-                    "https://i.postimg.cc/cH3stCXR/wheelofluckempty.png"};
+                    "https://i.postimg.cc/C1LnHJjw/Wheel-Of-Luck.png"};
             config.Panel = new Panel
             {
                 Image = new PanelImage
@@ -318,30 +322,41 @@ namespace Oxide.Plugins
             for (int i = 0; i < BasePlayer.activePlayerList.Count; i++)
             {
                 BasePlayer player = BasePlayer.activePlayerList[i];
+                Puts($"Updating user panel for: {player.displayName}");
                 yield return null;
                 var wheelOfLuckPlayer = wheelOfLuckPlayerData.playerData.Where(a => a.PlayerId == player.userID).FirstOrDefault();
                 if (wheelOfLuckPlayer != null)
                 {
+                    if(wheelOfLuckPlayer.Spins > 0)
+                    {
+                        if(image_change_timer == null)
+                        {
+                            image_change_timer = timer.Every(3f, () =>
+                            {
+
+                                MagicPanel?.Call("UpdatePanel", player, Name, (int)UpdateEnum.Image);
+
+                            });
+                        }
+                    }
+                    if(wheelOfLuckPlayer.Spins == 0)
+                    {
+                        if(image_change_timer !=null)
+                        {
+                            image_change_timer.Destroy();
+                            MagicPanel?.Call("UpdatePanel", player, Name, (int)UpdateEnum.Image);
+                        }
+                    }
                     if (wheelOfLuckPlayer.Spins > 0)
                     {
                         if (_pluginConfig.NotifyPlayer)
                         {
                             PrintToChat($"{player.displayName}, You have a spin available. To use it type /wheelofluck spin. We have {rustItemData.rustItems.Where(a => a.IncludeItem).Count()} items to give away!");
                         }
-                        image_change_timer = timer.Every(3f, () =>
-                        {
-
-                            MagicPanel?.Call("UpdatePanel", player, Name, (int)UpdateEnum.Image);
-
-                        });
+                        MagicPanel?.Call("UpdatePanel", player, Name, (int)UpdateEnum.Image);
                     }
                     else
                     {
-                        if (image_change_timer != null)
-                        {
-                            Puts("Destroying timer");
-                            image_change_timer.Destroy();
-                        }
                         MagicPanel?.Call("UpdatePanel", player, Name, (int)UpdateEnum.Image);
                     }
                 }
@@ -373,11 +388,7 @@ namespace Oxide.Plugins
                     {
                         PrintToChat($"{player.displayName}, You have a spin available. To use it type /wheelofluck spin. We have {rustItemData.rustItems.Where(a => a.IncludeItem).Count()} items to give away!");
                     }
-                    image_change_timer = timer.Every(3f, () =>
-                    {
-                        Puts("Adding timer");
-                        MagicPanel?.Call("UpdatePanel", player, Name, (int)UpdateEnum.Image);
-                    });
+                    MagicPanel?.Call("UpdatePanel", player, Name, (int)UpdateEnum.Image);
                 }
             }
         }
@@ -388,6 +399,7 @@ namespace Oxide.Plugins
             var wheelOfLuckPlayer = wheelOfLuckPlayerData.playerData.Where(a => a.PlayerId == player.userID).FirstOrDefault();
             if (wheelOfLuckPlayer != null)
             {
+                //Puts($"Found user: {wheelOfLuckPlayer.PlayerName}");
                 var time_till_next_item = wheelOfLuckPlayer.LastLogin.AddDays(1) - DateTime.Now;
                 if (time_till_next_item.Hours <= 0 && time_till_next_item.Minutes <= 0 && time_till_next_item.Seconds <= 0)
                 {
@@ -407,27 +419,57 @@ namespace Oxide.Plugins
                     {
                         panel.Image.Url = images[0];
                     }
+
                     if (wheelOfLuckPlayer.Spins < _pluginConfig.MaxSpinsAllowed)
                     {
-                        Puts($"Saving user data:{wheelOfLuckPlayer.PlayerName} Current Spins Left: {wheelOfLuckPlayer.Spins}");
-                        Puts($"Saving user data:{wheelOfLuckPlayer.PlayerName} Updated Spins Left: {wheelOfLuckPlayer.Spins+1}");
-                        wheelOfLuckPlayer.Spins = wheelOfLuckPlayer.Spins + 1;
-                        try
+                        int current_spins = wheelOfLuckPlayer.Spins;
+                        WheelOfLuckPlayer wolp = new WheelOfLuckPlayer();
+                        if (wheelOfLuckPlayerData.playerData.Contains(wheelOfLuckPlayer))
                         {
-                            Interface.Oxide.DataFileSystem.WriteObject("WheelOfLuckPlayers", wheelOfLuckPlayerData);
+                            wheelOfLuckPlayerData.playerData.Remove(wheelOfLuckPlayer);
+                            try
+                            {
+                                Puts($"Removing user data for {wheelOfLuckPlayer.PlayerName}");
+                                Interface.Oxide.DataFileSystem.WriteObject("WheelOfLuckPlayers", wheelOfLuckPlayerData);
+                                Puts($"Removed user data for {wheelOfLuckPlayer.PlayerName}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Puts(ex.Message);
+                                Puts(ex.StackTrace);
+                            }
+                            wolp.PlayerName = player.displayName;
+                            wolp.PlayerId = player.userID;
+                            wolp.LastLogin = DateTime.Now;
+                            wolp.Spins = current_spins + 1;
+                            wheelOfLuckPlayerData.playerData.Add(wolp);
+                            try
+                            {
+                                Puts($"Adding user data for {wheelOfLuckPlayer.PlayerName}");
+                                Interface.Oxide.DataFileSystem.WriteObject("WheelOfLuckPlayers", wheelOfLuckPlayerData);
+                                Puts($"Added user data for {wheelOfLuckPlayer.PlayerName}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Puts(ex.Message);
+                                Puts(ex.StackTrace);
+                            }
                         }
-                        catch(Exception ex)
+                        if (text != null)
                         {
-                            Puts(ex.Message);
-                            Puts(ex.StackTrace);
+                            text.Text = string.Format(_textFormat,
+                            "WheelOfLuck spins " + wolp.Spins,
+                            _pluginConfig.MaxSpinsAllowed);
                         }
                     }
-
-                    if (text != null)
+                    else
                     {
-                        text.Text = string.Format(_textFormat,
-                        "WheelOfLuck spins " + wheelOfLuckPlayer.Spins+1,
-                        _pluginConfig.MaxSpinsAllowed);
+                        if (text != null)
+                        {
+                            text.Text = string.Format(_textFormat,
+                            "WheelOfLuck spins " + wheelOfLuckPlayer.Spins,
+                            _pluginConfig.MaxSpinsAllowed);
+                        }
                     }
                 }
                 else
@@ -484,44 +526,61 @@ namespace Oxide.Plugins
                 {
                     panel.Image.Url = images[0];
                 }
-                try
+                if (wheelOfLuckPlayerData.playerData !=null)
                 {
-                    Puts($"Adding new player: {player.displayName}");
-                    wheelOfLuckPlayerData.playerData.Add(new WheelOfLuckPlayer() { LastLogin = DateTime.Now, PlayerName = player.displayName, PlayerId = player.userID, Spins = 1 });
-                }
-                catch(Exception ex)
-                {
-                    Puts(ex.Message);
-                    Puts(ex.StackTrace);
-                }
-                    
-                try
-                {
-                    Puts($"Saving new player: {player.displayName}");
-                    Interface.Oxide.DataFileSystem.WriteObject("WheelOfLuckPlayers", wheelOfLuckPlayerData);
-                }
-                catch (Exception ex)
-                {
-                    Puts(ex.Message);
-                    Puts(ex.StackTrace);
-                }
-
-                //Get new player
-                try
-                {
-                    var new_wheelofluckPlayer = wheelOfLuckPlayerData.playerData.Where(a => a.PlayerId == player.userID).FirstOrDefault();
-                    if (new_wheelofluckPlayer != null)
+                    WheelOfLuckPlayer wolplayer = new WheelOfLuckPlayer();
+                    try
                     {
-                        Puts($"Finding new player: {wheelOfLuckPlayer.PlayerName}");
-                        text.Text = string.Format(_textFormat,
-                        "WheelOfLuck spins " + new_wheelofluckPlayer.Spins,
-                        _pluginConfig.MaxSpinsAllowed);
+                        wolplayer.PlayerName = player.displayName;
+                        wolplayer.PlayerId = player.userID;
+                        wolplayer.Spins = 1;
+                        wolplayer.LastLogin = DateTime.Now;
+                        Puts($"Adding new player {player.displayName}...");
+                        wheelOfLuckPlayerData.playerData.Add(wolplayer);
+                        Puts("Added new player.");
                     }
-                }
-                catch(Exception ex)
-                {
-                    Puts(ex.Message);
-                    Puts(ex.StackTrace);
+                    catch (Exception ex)
+                    {
+                        Puts(ex.Message);
+                        Puts(ex.StackTrace);
+                    }
+
+                    try
+                    {
+                        Puts($"Saving new player {player.displayName}...");
+                        Interface.Oxide.DataFileSystem.WriteObject("WheelOfLuckPlayers", wheelOfLuckPlayerData);
+                        Puts("Saved player data.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Puts(ex.Message);
+                        Puts(ex.StackTrace);
+                    }
+
+                    //Get new player
+                    try
+                    {
+                        var new_wheelOfLuckPlayer = wheelOfLuckPlayerData.playerData.Contains(wolplayer);
+                        if (new_wheelOfLuckPlayer)
+                        {
+                            Puts($"Found new player: {wheelOfLuckPlayer.PlayerName}");
+                            text.Text = string.Format(_textFormat,
+                            "WheelOfLuck spins " + wolplayer.Spins,
+                            _pluginConfig.MaxSpinsAllowed);
+                        }
+                        else
+                        {
+                            Puts($"Unable to find player {wolplayer.PlayerName}");
+                            text.Text = string.Format(_textFormat,
+                            "WheelOfLuck spins " + 0,
+                            _pluginConfig.MaxSpinsAllowed);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Puts(ex.Message);
+                        Puts(ex.StackTrace);
+                    }
                 }
             }
             return panel.ToHash();
